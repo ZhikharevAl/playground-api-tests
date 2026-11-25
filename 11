@@ -2,3 +2,6 @@ dexe=server/src/main/kotlin/ru/sberbank/dogma/dexe/server
 sed -n '89,116p' "$dexe/service/RequestService.kt"
 sed -n '28,55p' "$dexe/service/validation/ValidationRules.kt"
 sed -n '322,418p' "$dexe/storage/service/RequestStorageService.kt"
+
+
+В execution-deals, только чтение. Выполни git branch -a --contains 15cdc24 и git show --stat 15cdc24. По ветке с реализацией покажи тело requestWriteDealsNotEmpty и путь записи documentsFolder. Ответь по коду и тестам на два вопроса: проходит ли обновление CONSULTATION или INDICATIVE_PRICING с deals: [] без terrBank и гарантирует ли успешная запись папки ровно version + 1. Приведи короткие фрагменты с путями и строками. Ветку не переключай, файлы не меняй.
