@@ -1,5 +1,1 @@
-Выполни вариант A в platform-execution-autotests. Создай новую ветку от актуального origin/develop и перенеси по порядку f263a0a5d, затем 79b37add0.
-
-При пересечениях в RequestWrite.kt и RequestReadDto.kt сверь итоговые поля с версией из develop: сохрани изменения EXECS-7217 и проверь наличие documentsFolder. Совпадение двух файлов не повод пропускать весь коммит с тестами.
-
-Перед push покажи git log --oneline origin/develop..HEAD и git diff --stat origin/develop...HEAD. Проверь, что в diff только EXECS-7231, включая пять новых спек, UpsRequestDocumentsMockService.kt и тест нового GET в UpsHeaderSpec. На новой базе запусти пять спек и обе итерации BigHeader для нового GET, укажи SHA запущенного UPS. Остановись перед push.
+Разбери только замечание №4. Сверь validateRequestFolderSaveAudit с сервисным B6 и найди в design.md, tasks.md или метамодели основание для operation = UPS_GET_REQUEST_ECM_TICKET у события UPS_DOGMA_SAVE_REQUEST_SUCCESS. Если связь закреплена, дай ссылку и закрой замечание без правки теста. Если основание только в текущей реализации, убери из внешнего автотеста лишь сравнение operation, сохранив проверки имени события, общего chainId, тела служебного сохранения с GUID и результата 200 OK.
