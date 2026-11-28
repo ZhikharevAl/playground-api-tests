@@ -1,8 +1,137 @@
 
-Проверь две находки ревью EXECS-7231 в platform-execution-autotests на HEAD e44ddf225. Только чтение кода.
+  ◆︎ Проверка выполнена по коду HEAD e44ddf225 (git rev-parse подтверждён). Репозиторий не менял: ни код, ни отчёты. Ниже — путь по коду и вердикты.
+ 
+    ---
+ 
+    Находка 1. «validateRequestFolderCreationInWrite не проверяет количество PUT → два одинаковых PUT пройдут незамеченными»
+ 
+    Вердикт: опровергнута в заявленном следствии; подтверждена только фактическая часть — в самом валидаторе действительно нет `assertEquals(1, …)`.
+ 
+    Путь от журнала до валидатора
 
-1. Проследи путь от журнала WireMock до validateRequestFolderCreationInWrite. Для каждого вызывающего сценария укажи, как отбираются PUT, где проверяется их количество и что произойдёт, если UPS отправит два одинаковых PUT с одним requestId и chainId. Назови конкретный тест, который упадёт, либо покажи путь, на котором оба PUT пройдут незамеченными.
+     1. Спека: upsDealsMockService.getDealRequestMock(headers, requestId) — UpsRequestDocumentsFolderCreationSpec.groovy:79,238,334,340,528.
+     2. UpsDealsMockService.kt:999-1003 → upsApiAndDbService.getMocksUpsCommonCreationRequest(RequestMethod.PUT, EXECUTION_REQUEST, headers, dealId.toString()).
+     3. UpsApiAndDbService.kt:396-402 → RequestPatternBuilder(PUT, WireMock.urlPathMatching("/v1/deals-execution/request/$requestId")) (EXECUTION_REQUEST — UpsConstants.kt:21).
+     4. WireMockUtils.kt:58-66: при непустом chainId добавляется .withHeader(X-Request-Chain-Id, equalTo(chainId)), затем WireMock.findAll.
+       Отбор: method + URL-подстрока с `requestId` + заголовок chainId. Тело, content-type и priority в отборе не участвуют — два PUT с одинаковым requestId и chainId оба попадут в список.
+     5. UpsCommonMockRequestsAssertService.kt:1091-1129: dealsMockRequests.map { … } + assertAll по 5 полям тела (documentsFolder, version, deals, clientUcpId, terrBank). Размер списка не проверяется. Для сравнения, у соседних  
+        валидаторов того же change'а проверка есть: :1070 (validateRequestDocumentsFolderInWrite), :1131, :1148, а также :1004.
+ 
+    Где количество PUT проверяется на самом деле
 
-2. В сценариях отказа DEXE и конкурентного первого открытия раскрой стабы PUT, включая зарегистрированные вложенными хелперами. Сопоставь method, URL, headers, body и priority. Определи, могут ли успешный стаб и стаб 409 принять один и тот же запрос и от чего тогда зависит ответ. Для конкурентного сценария проверь каждый chainId отдельно.
+    waitDealRequestMockSize (UpsDealsMockService.kt:1065-1071) — это upsWaitUntilCondition(UpsTimeOut.MOCK_STUB=7000 мс) { getDealRequestMock(...).size == size }, а upsWaitUntilCondition (UpsApiAndDbService.kt:70-73) —
+    Awaitility .until { … }, который бросает `ConditionTimeoutException`, если точное равенство не наступило (AwaitUtils.kt:17-33). То есть == size — жёсткий гейт, а не «не меньше».
 
-По каждой находке дай вердикт «подтверждена / опровергнута / недостаточно данных», ссылки на код и минимальную правку только для подтверждённой проблемы. Отдельно обозначь, какие выводы сделаны чтением. Код и отчёты в репозитории не меняй.
+
+    ┌─────┬──────────────────────────────────┬────────────────────────────────┬───────────────────────────────────────────────────────┬───────────────────────────────────────────────────┐
+    │ #   │ Тест (AllureId)                  │ Строки валидатора              │ Гейт счёта перед ним                                  │ При втором PUT (тот же requestId + chainId)       │
+    ├─────┼──────────────────────────────────┼────────────────────────────────┼───────────────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+    │ 1   │ 10065631, первое открытие        │ 78→79                          │ waitDealRequestMockSize(headers, requestId) = 1       │ счёт станет 2 ≠ 1 → тест падает на ожидании       │
+    ├─────┼──────────────────────────────────┼────────────────────────────────┼───────────────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+    │ 2   │ 10065619, отказ DEXE → успех     │ 214 (=1), затем 237 (=2) → 238 │ после 1-го GET ==1; суммарно после 2-го ==2           │ дубль на 1-м GET → 2 ≠ 1; на 2-м → 3 ≠ 2 → падает │
+    ├─────┼──────────────────────────────────┼────────────────────────────────┼───────────────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+    │ 3   │ 10065636, конкурентный, chainId₁ │ 333→334                        │ waitDealRequestMockSize(headers, requestId) = 1       │ 2 ≠ 1 → падает                                    │
+    ├─────┼──────────────────────────────────┼────────────────────────────────┼───────────────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+    │ 4   │ 10065636, конкурентный, chainId₂ │ 339→340                        │ waitDealRequestMockSize(secondHeaders, requestId) = 1 │ 2 ≠ 1 → падает (счёт отдельный по chainId)        │
+    ├─────┼──────────────────────────────────┼────────────────────────────────┼───────────────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+    │ 5   │ 10065635, повторное заведение    │ 501 (=0), затем 527 (=1) → 528 │ ==0, потом ==1                                        │ дубль на любом обращении → падает                 │
+    └─────┴──────────────────────────────────┴────────────────────────────────┴───────────────────────────────────────────────────────┴───────────────────────────────────────────────────┘
+
+
+    Дополнительно вне валидатора: 10065614 ждёт ==1 после двух GET (:117, :142), 10065623 — ==0 (:183), 10065644/10065635 — ==0 (:438, :463, :501). То есть заявленное «оба PUT пройдут незамеченными» не воспроизводится ни в      
+    одном из пяти вызовов.
+
+    Единственный путь, где дубль проходит
+
+    Счёт — это снимок «ровно N в какой-то момент опроса». Awaitility завершает ожидание на первом true; если второй PUT приходит после этого снимка (асинхронный ретрай уже после ответа клиенту, либо в узком окне между
+    waitDealRequestMockSize и валидатором), дальнейших проверок счёта в тестах нет. Валидатор такой дубль пропустит: тела идентичны, а map их только перепроверит. В тесте 10065619 валидатор к тому же получает […​.last()]        
+    (:238-243 — один элемент, самый свежий PUT; журнал findAll отдаёт события в хронологическом порядке), поэтому лишний элемент списка там не проверяется вообще.
+
+    Минимальная правка для подтверждённой части (одна строка, не блокер): в начало validateRequestFolderCreationInWrite добавить
+
+     1 assertEquals(1, dealsMockRequests.size, "Unexpected count of requests to execution-deals")
+
+    Она совместима со всеми пятью вызовами: каждый передаёт на этот момент список из одного элемента (на 238 — […​.last()]). Она закрывает окно «дубль после снимка» в четырёх вызовах и приводит новый валидатор к конвенции       
+    соседних.
+ 
+    ---
+
+    Находка 2. «В отказе DEXE и в конкурентном первом открытии успешный стаб и стаб 409 могут принять один и тот же запрос»
+
+    Сценарий отказа DEXE — 10065619 (UpsRequestDocumentsFolderCreationSpec.groovy:190-251)
+
+    Регистрация стабов идёт в три шага:
+
+
+    Стаб: S1 success
+    Откуда: createSuccessMocksForRequestDocumentsFolderCreation (UpsRequestDocumentsMockService.kt:37-47) → createUpdateMockForRequests (UpsDealsMockService.kt:75) → UpsDealsMock.createParametrizedMockForRequest
+    (UpsDealsMock.kt:290) → createMockRequest (:718-731)
+    method: PUT
+    URL: urlPathMatching("/v1/deals-execution/request/<uuid>")
+    headers: X-Request-Chain-Id == headers.chainId, Content-Type == application/json (+ inScenario(<random uuid>) без required state)
+    body: не матчится
+    priority: 5 (default)
+    ответ: 200, JSON "200 OK"
+    ────────────────────────────────────────
+    Стаб: E1 409
+    Откуда: createErrorMockForRequestSave (UpsDealsMockService.kt:65-67) → UpsDogmaErrorMock.createJsonErrorMock:15 → createErrorMock:30-37
+    method: PUT
+    URL: urlPathEqualTo("/v1/deals-execution/request/<uuid>")
+    headers: X-Request-Chain-Id == headers.chainId
+    body: не матчится
+    priority: 5 (default)
+    ответ: 409, JSON conflictError
+    ────────────────────────────────────────
+    Стаб: S2 success
+    Откуда: createUpdateMockForRequests(headers, requestId) после первого GET (spec:218) — тот же код, что S1
+    method: PUT
+    URL: как S1
+    headers: как S1
+    body: не матчится
+    priority: 5
+    ответ: 200
+
+ 
+     - Множество запросов, которые принимает E1, — надмножество S1/S2: E1 не требует content-type. Любой JSON-PUT UPS-а подходит всем трём стабам.
+     - Отличает их только очередность: SortedConcurrentMappingSet сортирует по priority, при равенстве — по обратному insertion index (позже добавленный раньше), DEFAULT_PRIORITY = 5, а isIndependentOfScenarioState() =
+       !isInScenario() || requiredScenarioState == null → уникальные имена сценариев матчинг не ограничивают (исходники wiremock-3.10.0-sources.jar из Gradle-кэша: SortedConcurrentMappingSet, StubMapping:38,200-208; в проекте   
+       atPriority не используется ни разу).
+     - Поэтому: первый PUT → E1 (зарегистрирован позже S1), второй → S2 (зарегистрирован позже E1). Ответ определяется только порядком регистрации стабов, а не содержимым запроса.
+     - Ложнозелёного это не даёт: при инверсии порядка первый GET вернёт 200 и упадёт проверка 409, второй вернёт 409 и упадёт проверка 200 с version+1. Риск только диагностический: E1 шире по заголовкам, поэтому если UPS сменит
+        Content-Type, второй PUT «провалится» в 409 с неочевидным симптомом.
+     - E1 остаётся зарегистрированным до конца класса (WireMock.reset() только в UpsBaseSpec.setupSpec():189-192), но chainId генерируется заново на каждый generateUpsHeaders (UpsGenerateEntity.kt:1090-1098) → на другие тесты   
+       класса он не влияет.
+
+    Конкурентный сценарий — 10065636 (spec:256-347)
+ 
+    По каждому chainId отдельно:
+ 
+ 
+    ┌────────────────────────┬─────────────────────────────────────────────────────────────┬────────────┐                                                                                                                           
+    │ chainId                │ PUT-стабы, матчащие /v1/deals-execution/request/<requestId> │ Ответ      │                                                                                                                           
+    ├────────────────────────┼─────────────────────────────────────────────────────────────┼────────────┤                                                                                                                           
+    │ headers (chain₁)       │ ровно один — S1 success (200)                               │ всегда 200 │                                                                                                                           
+    ├────────────────────────┼─────────────────────────────────────────────────────────────┼────────────┤                                                                                                                           
+    │ secondHeaders (chain₂) │ ровно один — E2 409 (spec:284-286)                          │ всегда 409 │                                                                                                                           
+    └────────────────────────┴─────────────────────────────────────────────────────────────┴────────────┘                                                                                                                           
+
+    Пересечения нет: оба стаба содержат X-Request-Chain-Id == equalTo(<свой chainId>) (WireMockUtils.kt:98-102), а headers и secondHeaders — разные случайные UUID (UpsGenerateEntity.kt:1094). GET / recreate-structure /
+    acquire-ticket тоже разделены по chainId и URL (UpsEcmMock.kt:133-143), тело не матчится нигде. Значит, ответ каждого обращения предопределён стабом своего chainId, а не тем, какой поток финишировал первым — этим тест и     
+    детерминирован (getRequestDocumentsTicketConcurrently, UpsApiAndDbService.kt:146-178, возвращает ответы в порядке headersList).
+
+    Вердикт по находке 2: подтверждена для последовательного сценария отказа DEXE (перекрытие реально, ответ = порядок регистрации), опровергнута для конкурентного сценария (изоляция по chainId, каждый PUT матчится ровно одним  
+     стабом).
+
+    Минимальная правка, если убирать неявность (не блокер): сохранить возвращаемый StubMapping и проверить, что ответ пришёл именно от него — def conflictStub = upsDealsMockService.createErrorMockForRequestSave(...) + assert    
+    upsDealsMockService.isStubServed(conflictStub) (прецедент — UpsPutRequestSpec.groovy:318, UpsDogmaErrorMock.isServed:26-27). Полная независимость от порядка (atPriority + removeStub) — новый для репозитория паттерн (0       
+    использований), это уже не «минимальная правка» и требует согласования.
+
+    ---
+
+    Что именно сделано чтением (а не прогоном)                                                                                                                                                                                      
+
+     - Тесты не запускались; выводы «какой тест упадёт» — дедукция из точного равенства в waitDealRequestMockSize и семантики Awaitility .until { } (AwaitUtils.kt:17-33 → ConditionTimeoutException).
+     - Семантика выбора стаба проверена по исходникам библиотеки WireMock 3.10.0 (единственная версия в Gradle-кэше проекта): SortedConcurrentMappingSet (priority → обратный insertion index),
+       StubMapping.DEFAULT_PRIORITY/isIndependentOfScenarioState/comparePriorityWith, AbstractRequestJournal.getRequestsMatching (хронологический порядок, поэтому .last() в spec:238 — самый свежий PUT).
+     - Остальное — построчное чтение HEAD e44ddf225: спек UpsRequestDocumentsFolderCreationSpec, UpsDealsMockService, UpsDealsMock, UpsDogmaErrorMock, UpsRequestDocumentsMockService, UpsEcmMock, UpsApiAndDbService,
+       WireMockUtils, UpsGenerateEntity, UpsConstants, AwaitUtils, UpsBaseSpec; validateRequestFolderCreationInWrite подтверждён как добавленный этим change'ем (git diff acbcde59a — только вставки).
